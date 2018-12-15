@@ -17,6 +17,8 @@ In this project, we will analyze a Google Merchandise Store (also known as GStor
 
 ## Data Description
 
+The data can be downloaded at [github](https://github.com/CHuanSite/Google-Revenue/tree/master/dataset)
+
 The original data is from Kaggle contest “Google Analytics Customer Revenue Prediction”. And also hits part from google analytics API (which is also included in Kaggel version 2 data).
 Raw Data
 
@@ -99,7 +101,7 @@ library(knitr)
 library(kableExtra)
 library(plotly)
 # train = read.csv('/Users/alice/Documents/yr2term1/data science/project/Data/train_US_1year_nojson.csv')
-load("../dataset/US_1year.Rdata")
+load("./dataset/US_1year.Rdata")
 train = dat
 ```
 
@@ -555,7 +557,7 @@ library(keras)
 ### Reading Data
 ```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
 ## Read in data
-load("../dataset/US_1year.Rdata")
+load("./dataset/US_1year.Rdata")
 
 ## Take a quick glimpse at the data
 glimpse(dat)
@@ -829,7 +831,7 @@ You will find that `Deep Learning` outperforms all the other methods by a margin
 ```{r, warning = FALSE, message = FALSE, tidy = TRUE}
 library(randomForest)
 
-load("../dataset/full.Rdata")
+load("./dataset/full.Rdata")
 glimpse(full)
 full = full %>% mutate(ID = paste0(fullVisitorId, visitId))
 ```
@@ -840,7 +842,7 @@ full = full %>% mutate(ID = paste0(fullVisitorId, visitId))
 Let's wait and have a sight of what good are people buying.
 
 ```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
-load("../dataset/hits.Rdata")
+load("./dataset/hits.Rdata")
 
 hits_data = hits_data %>% mutate(ID = paste0(fullVisitorId, visitId))
 buy.id = hits_data %>% group_by(ID) %>%
@@ -878,7 +880,7 @@ colormap = function(x){
   col
 }
 buycount %>% mutate(`Ratio (%)` = count / sum(count) * 100) %>% 
-             select(-count) %>% arrange(desc(`Ratio (%)`)) %>% head(n=10) %>%
+             dplyr::select(-count) %>% arrange(desc(`Ratio (%)`)) %>% head(n=10) %>%
              rename(`Good Name` = name) %>%
              mutate(`Ratio (%)` = cell_spec(`Ratio (%)`, color = colormap(`Ratio (%)`))) %>%
              kable(escape = F) %>%
@@ -923,7 +925,7 @@ table(transaction = viewer$buy, just_view = viewer$just.view) %>%
   kable() %>% 
   kable_styling(bootstrap_options = "striped", full_width = F, position = "left") %>%
   add_header_above(c("Transaction?" = 1, "Just Viewing?" = 2))
-viewer = viewer %>% mutate(ID = paste0(fullVisitorId, visitId)) %>% select(-buy)
+viewer = viewer %>% mutate(ID = paste0(fullVisitorId, visitId)) %>% dplyr::select(-buy)
 
 ### Which also suggest there should be some tag that is about transaction
 ### Yes! eventInfo.eventAction is discribing people's action in the website
@@ -1014,18 +1016,20 @@ reduced$price_q5 = log(1+reduced$price_q5)
 reduced = merge(reduced, viewer, by="ID")
 
 ```
-```{r}
+
+```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
 ### Let's see how can reduce itself perform for predicting
-revenue = full %>% group_by(ID) %>%
-          summarise(transactionRevenue = log(1+max(transactionRevenue)),
+revenue = full %>% 
+  group_by(ID) %>%
+  summarise(transactionRevenue = log(1+max(transactionRevenue)),
                     hits1 = max(hits1))
 
 from_hits = merge(reduced, revenue, by="ID")
 glimpse(from_hits)
 
 train.ind = sample(nrow(from_hits), floor(0.7*nrow(from_hits)), replace = F)
-train = from_hits[train.ind,] %>% select(-ID, -time_q1)
-test = from_hits[-train.ind,] %>% select(-ID, -time_q1)
+train = from_hits[train.ind,] %>% dplyr::select(-ID, -time_q1)
+test = from_hits[-train.ind,] %>% dplyr::select(-ID, -time_q1)
 
 rf = randomForest(transactionRevenue~., data = train, ntree = 1000)
 rf.pred = predict(rf, newdata = test)
@@ -1043,7 +1047,7 @@ Now let's combine original data and our features extracted from hits data, and f
 
 ```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
 original = full %>% group_by(ID) %>% filter(hitNumber == max(hitNumber))
-original = original[,1:34] %>% select(-hitNumber) %>%
+original = original[,1:34] %>% dplyr::select(-hitNumber) %>%
            mutate(ID = paste0(fullVisitorId, visitId)) %>%
            dplyr::select(-fullVisitorId, -visitId)
 
@@ -1073,8 +1077,8 @@ Here goes the final model, we use just.view to role out those just viewers (abou
 
 ```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
 train.ind = sample(nrow(final), floor(0.7*nrow(final)), replace = F)
-train = final[train.ind,] %>% select(-time_q1)
-test = final[-train.ind,] %>% select(-time_q1)
+train = final[train.ind,] %>% dplyr::select(-time_q1)
+test = final[-train.ind,] %>% dplyr::select(-time_q1)
 
 
 table(transaction = final$transactionRevenue>0, just_view = final$just.view)
@@ -1101,3 +1105,15 @@ data.frame(importance = rf.sub$importance[,1], feature = rownames(rf.sub$importa
 ```
 
 You can see the result is also good but similar to just use summary hits data, maybe original data is not powerful compare to this one.
+
+# Summary
+
+We learn that
+1. representing data is always an open question. You need to fully explore the data than you can find the right way to do it.
+2. Choosing models is not originally important, we can train them all and compare. But models typically will give reasonable result as you originally explore. Therefore, process to choose model will increase your efficiency
+3. For ill-conditioned problems, fit another model to make the problem more regular might not improve the result (sequential modeling might introducing too much variation). But use some exploration result from the data to make the problem less ill-conditioned can help, which suggest us to fully explore the data before modeling and not using modeling itself to assist modeling.
+
+We justify our answers through a randomly assigned test dataset
+
+The limitatiion is that actually the dataset encode a lot of the web behavior and some of the features are happening across the visiting process, therefore some of the features may not be observed at the begining stage. Therefore as a pure prediction model, the useful case of this might be limited.
+
