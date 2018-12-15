@@ -13,6 +13,8 @@ output: html_document
 
 [Web](https://chuansite.github.io/Data_Web/)
 
+[Web git](https://github.com/CHuanSite/Data_Web)
+
 [Shiny](https://luqingan.shinyapps.io/google_revenue/)
 
 [Shiny git](https://github.com/luqingan/google_revenue_shiny)
