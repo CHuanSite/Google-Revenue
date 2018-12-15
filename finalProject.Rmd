@@ -1,0 +1,1103 @@
+---
+title: "Google Analytics Customer Revenue Prediction"
+author: "Luqin Gan, Huan Chen, Bohao Tang"
+date: "December 14, 2018"
+output: html_document
+---
+
+## Motivation and Overview
+
+Our project is based on the Kaggle Competition Google Analytics Customer Revenue Prediction and the following are from the descritption of this competition.
+
+The 80/20 rule has proven true for many businesses–only a small percentage of customers produce most of the revenue. As such, marketing teams are challenged to make appropriate investments in promotional strategies.
+
+RStudio, the developer of free and open tools for R and enterprise-ready products for teams to scale and share work, has partnered with Google Cloud and Kaggle to demonstrate the business impact that thorough data analysis can have.
+
+In this project, we will analyze a Google Merchandise Store (also known as GStore, where Google swag is sold) customer dataset to predict revenue per customer. Hopefully, the outcome will be more actionable operational changes and a better use of marketing budgets for those companies who choose to use data analysis on top of GA data
+
+## Data Description
+
+The original data is from Kaggle contest “Google Analytics Customer Revenue Prediction”. And also hits part from google analytics API (which is also included in Kaggel version 2 data).
+Raw Data
+
+A brief description of the original data can be found from Kaggle
+
+  1.  fullVisitorId- A unique identifier for each user of the Google Merchandise Store.
+
+  2.  channelGrouping - The channel via which the user came to the Store.
+
+  3.  date - The date on which the user visited the Store.
+
+  4.  device - The specifications for the device used to access the Store.
+
+  5.  geoNetwork - This section contains information about the geography of the user.
+
+  6.  socialEngagementType - Engagement type, either “Socially Engaged” or “Not Socially Engaged”.
+
+  7.  totals - This section contains aggregate values across the session.
+
+  8.  trafficSource - This section contains information about the Traffic Source from which the session originated.
+
+  9.  visitId - An identifier for this session. This is part of the value usually stored as the _utmb cookie. This is only unique to the user. For a completely unique ID, you should use a combination of fullVisitorId and visitId.
+
+  10.  visitNumber - The session number for this user. If this is the first session, then this is set to 1.
+
+  11.  visitStartTime - The timestamp (expressed as POSIX time).
+
+  12.  hits - This row and nested fields are populated for any and all types of hits. Provides a record of all page visits.
+
+  13.  customDimensions - This section contains any user-level or session-level custom dimensions that are set for a session. This is a repeated field and has an entry for each dimension that is set.
+
+  14.  totals - This set of columns mostly includes high-level aggregate data.
+
+Where the totals and hits are all json object, and we expand it. Totals contain high-level aggregated data, like revenue is in the totals.
+
+Hits is the detailed web action the visitor have. It will record every website visited and action the visitor done. Therefore the transaction columns are in the hits, which means if you use hits to predict the revenue then you can atucally fully recover those digits. Therefore we remove all columns related directly to transaction.
+
+There are still lots of other features remian in hits.
+
+  1.  time – Millisecond of visiting time for each pages
+
+  2.  Product - Which good are visitor currently viewing, also contain their price and name
+
+  3.  page.* - The exact web path along the visitor’s visiting.
+
+  5.  social.* - If the visitor have a social network referral and where the referral from.
+
+  6.  content* - What class of content are visitor viewing
+
+  7.  eventInfo* - The action visitor took during the whole visiting
+
+And also some other technical columns not easy to understand. In this version of hits data, it contain multiple rows for one visitor, therefore we need to get some features and summarise it. We do this through a detailed EDA of the hits data only and find some patterns for buyers. Therefore we reduce our hits data according to these patterns. And only use the reduced features and no original data, doing a randomforest already improve result to some extent.
+
+The Summary Data is like:
+
+  1. time_* - Some quantiles of page visiting duration
+
+  2. *_count - The count of certain action or state the visitor have during whole visiting. Say social_count is for the referral he had. Bags_count is the count of pages related to Bags, and Click_count the count for number of clicking on good pictures the visitor had.
+
+  3. price_* - Some quantile of good prices the visitor took action on
+
+  4. just.view - A summary statistics telling you if the visitor is just viewing and have no actions.
+
+
+Need to mention that 
+
+  1.  This is the whole data process method used, therefore in the begining of the markown we won't use the last level data. 
+  2.  We don't include formating and expanding code for the raw data because that is boring (lots of gsub) and away from our statistical goal. But any data we need here is in the project github.
+  3.  In the part using hits data, since hits data have multiple rows for one person, therefore to avoid too much rows, we randomly sampled 7w+ ids (about 1/4) from original data to combine with expended hits data. And the expended rows number are 30w+, which are comparable to original data.
+
+## Data exploration
+
+```{r, warning = FALSE, message = FALSE, tidy = TRUE}
+library(ggplot2)
+library(lubridate)
+library(usmap)
+library(tidyverse)
+library(reshape)
+library(knitr)
+library(kableExtra)
+library(plotly)
+# train = read.csv('/Users/alice/Documents/yr2term1/data science/project/Data/train_US_1year_nojson.csv')
+load("../dataset/US_1year.Rdata")
+train = dat
+```
+
+#### Check features with missing values 
+
+Original data is missing at huge ratio, let's explore and try to deal with it
+
+```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
+train$totalTransactionRevenue[which(is.na(train$totalTransactionRevenue))] = 0
+miss = data.frame(Features = colnames(train), Number = sapply(1:ncol(train), function(x) length(which(is.na(train[,x])))), Percent = round(sapply(1:ncol(train), function(x) length(which(is.na(train[,x]))))/nrow(train),2))
+
+miss_bar = miss[(which(miss$Percent!=0)),]
+plot_ly(miss_bar,y=~reorder(Features,-Percent),x=~Percent,type = 'bar',text = miss_bar$Percent,orientation = 'h')%>%
+  layout(title = "Missing data",
+         xaxis = list(title = "Percent"),
+        yaxis = list(title = "Features"))
+# 
+# plot_ly(miss_bar,x=~reorder(Features,-Percent),y=~Percent,type = 'bar',text = miss_bar$Percent)%>%
+#   layout(title = "Missing data",
+#          yaxis = list(title = "Percent"),
+#          xaxis = list(title = "Features"))
+
+miss %>%
+  mutate_if(is.numeric, function(x) {
+    cell_spec(x, bold = T, 
+              color = spec_color(x, end = 0.9),
+              font_size = spec_font_size(x))
+  }) %>%
+  kable(escape = F, align = "c",caption = "Missing data summary") %>%
+  kable_styling(c("striped", "condensed"), full_width = F)
+
+dat = train[,which(miss$Percent<0.8)]
+
+# test_shiny = train[1:100,-c(32:35)]
+# 
+# write.csv(test_shiny,file='/Users/alice/Documents/yr2term1/data science/homework/google_revenue/test_shiny.csv')
+
+```
+
+We droped the features which have greater than 80% missing values. 
+
+#### Channel Grouping 
+
+Here we explore the marketing channel grouping distribution. 
+
+```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
+
+cg = data.frame(table(train$channelGrouping))
+percent <- function(x, digits = 2, format = "f", ...) {
+  paste0(formatC(100 * x, format = format, digits = digits, ...), "%")
+}
+cg  = cg%>% 
+  mutate(percent = percent(Freq/sum(Freq)))
+
+cg = cg[order(-cg$Freq),]
+
+plot_ly(cg,x=~reorder(Var1,-Freq),y=~Freq,type = 'bar',text = cg$percent)%>%
+  layout(title = "Channel Grouping",
+         xaxis = list(title = "Channel Grouping"),
+        yaxis = list(title = "Number"))
+```
+Over 40% of the visitors used organic search. 
+
+Here we explore the browser distribution. 
+```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
+
+names(sort(table(train$browser),decreasing=TRUE)[1:10])
+train_brow = train[which(train$browser%in%names(sort(table(train$browser),decreasing=TRUE)[1:10])),]
+brow = data.frame(table(train_brow$browser))
+brow = brow[-which(brow$Freq==0),]
+brow  = brow%>% 
+  mutate(percent = percent(Freq/sum(Freq)))
+
+plot_ly(brow,x=~reorder(Var1,-Freq),y=~Freq,type = 'bar',text = brow$percent)%>%
+  layout(title = "Top 10 Browser",
+         xaxis = list(title = "Browser"),
+        yaxis = list(title = "Number"))
+```
+Most of the visitors used chrome browser. The most used browsers are chrome, safari, firefox. 
+
+Here we explore the device category distribution. 
+
+```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
+dc = data.frame(table(train$deviceCategory))
+dc  = dc%>% 
+  mutate(percent = percent(Freq/sum(Freq)))
+
+plot_ly(dc,x=~reorder(Var1,-Freq),y=~Freq,type = 'bar',text = dc$percent)%>%
+  layout(title = "Device Category",
+         xaxis = list(title = "Device Category"),
+        yaxis = list(title = "Number"))
+colnames(train)
+```
+
+The most used device is desktop. 
+
+```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
+IM = data.frame(table(train$isMobile))
+IM  = IM%>% 
+  mutate(percent = percent(Freq/sum(Freq)))
+
+plot_ly(IM,x=~reorder(Var1,-Freq),y=~Freq,type = 'bar',text = IM$percent)%>%
+  layout(title = "isMobile",
+         xaxis = list(title = "isMobile"),
+        yaxis = list(title = "Number"))
+
+```
+
+
+Here we explore the device operating system. 
+
+```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
+train_os = train[which(train$operatingSystem%in%names(sort(table(train$operatingSystem),decreasing=TRUE)[1:10])),]
+os = data.frame(table(train_os$operatingSystem))
+os = os[-which(os$Freq==0),]
+os  = os%>% 
+  mutate(percent = percent(Freq/sum(Freq)))
+
+plot_ly(os,x=~reorder(Var1,-Freq),y=~Freq,type = 'bar',text = os$percent)%>%
+  layout(title = "Top 10 Operating System",
+         xaxis = list(title = "Operating System"),
+        yaxis = list(title = "Number"))
+
+```
+Most of the visitors used Mac. The most used operating systems are Mac, Windows, IOS, Android.  
+
+
+Here we explore the device network domain. 
+
+```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
+train_nd = train[which(train$networkDomain%in%names(sort(table(train$networkDomain),decreasing=TRUE)[1:10])),]
+networkDomain = data.frame(table(train_nd$networkDomain))
+networkDomain = networkDomain[-which(networkDomain$Freq==0),]
+networkDomain  = networkDomain%>% 
+  mutate(percent = percent(Freq/sum(Freq)))
+
+
+plot_ly(networkDomain,x=~reorder(Var1,-Freq),y=~Freq,type = 'bar',text = networkDomain$percent)%>%
+  layout(title = "Top 10 Network Domain",
+         xaxis = list(title = "Network Domain"),
+        yaxis = list(title = "Number"))
+```
+The most used network domains are comcast, rr, verizon. 
+
+Now we check these features correlation.
+
+```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
+ob = table(train$browser,train$operatingSystem)
+ob = ob[,which(colSums(ob)!=0)]
+ob = ob[which(rowSums(ob)!=0),]
+ob = melt(ob)
+
+ggplot(ob, aes(Var.1,Var.2)) + geom_tile(aes(fill = value), colour = "white")+
+  scale_fill_gradient(low = "white",high = "steelblue")+
+  theme(plot.title = element_text(hjust = 0.5),
+    axis.text.x = element_text(angle = 45, hjust = 1, size=13))+
+    geom_text(aes(label = round(value, 1))) +
+    labs(title = "Browser vs. OperatingSystem ", x = 'Browser', y = "OperatingSystem")
+
+```
+
+The most frequent combiniation of the visits is using Chrome browser from Mac. 
+
+
+```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
+dd = table(train_brow$browser,train_brow$deviceCategory)
+dd = dd[,which(colSums(dd)!=0)]
+dd = dd[which(rowSums(dd)!=0),]
+dd = melt(dd)
+
+ggplot(dd, aes(Var.2,Var.1)) + geom_tile(aes(fill = value), colour = "white")+
+  scale_fill_gradient(low = "white",high = "steelblue")+
+      geom_text(aes(label = round(value, 1))) +
+  theme(plot.title = element_text(hjust = 0.5),
+    axis.text.x = element_text(angle = 45, hjust = 1, size=13))+
+    labs(title = "Browser vs. Device Category ", x = 'Device Category', y = "Browser")
+
+```
+
+The most frequent combiniation of the visits is using Chrome browser on desktop. 
+
+```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
+mc = table(train_brow$isMobile,train_brow$deviceCategory)
+mc = mc[,which(colSums(mc)!=0)]
+mc = mc[which(rowSums(mc)!=0),]
+mc = melt(mc)
+
+ggplot(mc, aes(Var.1,Var.2)) + geom_tile(aes(fill = value), colour = "white")+
+  scale_fill_gradient(low = "white",high = "steelblue")+
+  theme(plot.title = element_text(hjust = 0.5),
+    axis.text.x = element_text(angle = 45, hjust = 1, size=13))+
+      geom_text(aes(label = round(value, 1))) +
+    labs(title = "Device is Mobile vs. Device Category ", x = 'Device is Mobile ', y = "Device Category")
+```
+
+Now we explore geographical attributes of the visit. 
+
+```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
+city = data.frame(table(train$city))
+city = city[city$Freq>mean(city$Freq),]
+city = city%>% 
+  mutate(percent = percent(Freq/sum(Freq)))
+
+
+plot_ly(city,x=~reorder(Var1,-Freq),y=~Freq,type = 'bar',text = city$percent)%>%
+  layout(title = "City",
+         xaxis = list(title = "City"),
+        yaxis = list(title = "Number"))
+```
+
+The most frequent city is Mountain View. 
+
+```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
+reg = data.frame(table(train$region))
+reg = reg[reg$Freq>mean(reg$Freq),]
+reg = reg%>% 
+  mutate(percent = percent(Freq/sum(Freq)))
+
+plot_ly(reg,x=~reorder(Var1,-Freq),y=~Freq,type = 'bar',text = reg$percent)%>%
+  layout(title = "Region",
+         xaxis = list(title = "Region"),
+        yaxis = list(title = "Number"))
+
+```
+
+The most frequent region is California. 
+
+```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
+metro = data.frame(table(train$metro))
+metro = metro[metro$Freq>mean(metro$Freq),]
+metro = metro%>% 
+  mutate(percent = percent(Freq/sum(Freq)))
+
+plot_ly(metro,x=~reorder(Var1,-Freq),y=~Freq,type = 'bar',text = metro$percent)%>%
+  layout(title = "Metro",
+         xaxis = list(title = "Metro"),
+        yaxis = list(title = "Number"))
+```
+
+The most frequent metros are San Francisco, New York, and Los Angeles. 
+
+
+```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
+# The revenue corresponds to the different states in USA
+l <- list(color = toRGB("white"), width = 2)
+g <- list(
+  scope = 'usa',
+  projection = list(type = 'albers usa'),
+  showlakes = TRUE,
+  lakecolor = toRGB('white')
+)
+map.visit <- dat %>%
+  select(region,transactionRevenue) %>%
+  group_by(region) %>%
+  summarise(n = round(log(n()),3),rev = round(log(sum(as.numeric(na.omit(transactionRevenue)))+1),3)) %>%
+  rename(full = region)
+
+
+state.google <- statepop %>%
+  select(fips, abbr, full) %>%
+  left_join(map.visit, by = "full")
+
+state.google$n[is.na(state.google$n)] = 0
+# state.google$hover <- with(state.google, paste('State: ',full, '<br>', "Revenue: ", n))
+state.google$hover <- with(state.google, paste(full))
+
+plot_geo(state.google, locationmode = 'USA-states') %>%
+  add_trace(
+    z = ~n, text = ~hover, locations = ~abbr,
+    color = ~n, colors = 'Greens'
+  ) %>%
+  colorbar(title = "log(Number of visit)") %>%
+  layout(
+    title = 'Visit per State (log scale)',
+    geo = g
+  )
+```
+
+The state with the largest number of visit is California, and the state with the second largest visit is New York. 
+
+```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
+
+plot_geo(state.google, locationmode = 'USA-states') %>%
+  add_trace(
+    z = ~rev, text = ~hover, locations = ~abbr,
+    color = ~rev, colors = 'Blues'
+  ) %>%
+  colorbar(title = "log(TransactionRevenue) USD") %>%
+  layout(
+    title = 'Google transaction revenue by State (log scale)',
+    geo = g
+  )
+```
+
+Consistent with the number of visit, the state with the highest transaction revenue is California, and the state with the second highest transaction revenue is New York. 
+
+Now we show the distribution of visit per state, considering only visits with non-zero transactions. 
+```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
+map.visit2 <- dat %>%
+  select(region,transactionRevenue) %>%
+  filter(transactionRevenue>0)%>%
+  group_by(region) %>%
+  summarise(n = round(log(n()),3),rev = round(log(sum(as.numeric(na.omit(transactionRevenue)))+1),3)) %>%
+  rename(full = region)
+
+state.google2 <- statepop %>%
+  select(fips, abbr, full) %>%
+  left_join(map.visit2, by = "full")
+
+state.google2$n[is.na(state.google2$n)] = 0
+
+state.google2$hover <- with(state.google2, paste(full))
+
+plot_geo(state.google2, locationmode = 'USA-states') %>%
+  add_trace(
+    z = ~n, text = ~hover, locations = ~abbr,
+    color = ~n, colors = 'Reds'
+  ) %>%
+  colorbar(title = "log(Number of visit) ") %>%
+  layout(
+    title = 'Visit per State in non-zero transactions (log scale)',
+    geo = g
+  )
+
+```
+
+The total numbers in each state are smaller, and the top 2 states with largest number of visits are California and New York. 
+
+#### Date and time 
+```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
+dat = dat%>%
+  mutate(date= ymd(date))
+
+date = dat%>%
+  select(date,transactionRevenue) %>%
+  group_by((date)) %>%
+  summarise(n = round(log(n()),3),rev = round(log(sum(as.numeric(na.omit(transactionRevenue)))+1),3))
+colnames(date)[1] = 'Date'
+
+date$hover <- with(date, paste('Date: ',Date, '<br>', "Visits: ", n,'<br>','Revenue: ', rev))
+
+plot_ly(x = ~Date, y = ~rev, data = date, mode = 'lines', hoverinfo = 'text', text = date$hover)%>%
+  layout(title = "Revenues per day (log scale)",
+         xaxis = list(title = "Day"),
+        yaxis = list(title = "Revenue"))
+
+```
+
+We plot the time series for transaction revenues. 
+
+
+```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
+year = dat%>%
+  select(date,transactionRevenue) %>%
+  group_by(year(date)) %>%
+  summarise(n = round(log(n()),3),rev = round(log(sum(as.numeric(na.omit(transactionRevenue)))+1),3))
+
+colnames(year)[1] = 'Year'
+year$Year = as.character(year$Year)
+ggplot(year,aes(x = Year , y = n))+
+  geom_bar(stat="identity",fill="#FF6666")+
+  theme(plot.title = element_text(hjust = 0.5),
+    axis.text.x = element_text(angle = 45, hjust = 1, size=13))+
+          geom_text(aes(label=n ), vjust=0) +
+    labs(title = "Visit per year (log scale)", x = 'Year', y = "Number")
+
+ggplot(year,aes(x = Year , y = rev))+
+  geom_bar(stat="identity",fill="darkblue")+
+  theme(plot.title = element_text(hjust = 0.5),
+    axis.text.x = element_text(angle = 45, hjust = 1, size=13))+
+          geom_text(aes(label=rev ), vjust=0) +
+    labs(title = "Revenue per year (log scale)", x = 'Year', y = "Number")
+```
+
+For 2016 and 2017, the numbers of visit in each year are similar, as well as tansaction revenue. 
+
+
+```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
+mm <- c('January', 'February', 'March', 'April', 'May', 'June', 'July',
+         'August', 'September', 'October', 'November', 'December')
+month = dat%>%
+  select(date,transactionRevenue) %>%
+  group_by(month(date)) %>%
+  summarise(n = round(log(n()),3),rev = round(log(sum(as.numeric(na.omit(transactionRevenue)))+1),3))
+month = data.frame(Month = mm,month)
+
+month$Month <- factor(month$Month, levels = month[['Month']])
+
+month$hover <- with(month, paste('Month: ',Month, '<br>', "Visits: ", n,'<br>','Revenue: ', rev))
+
+plot_ly(x = ~Month, y = ~rev, data = month,type = 'scatter', mode = 'lines', hoverinfo = 'text', text = month$hover)%>%
+  layout(title = "Revenues per month (log scale)",
+         xaxis = list(title = "Month"),
+        yaxis = list(title = "Revenue"))
+```
+
+April has the highest revenue. 
+
+```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
+week = dat%>%
+  select(date,transactionRevenue) %>%
+  group_by(weekdays(date)) %>%
+  summarise(n = round(log(n()),3),rev = round(log(sum(as.numeric(na.omit(transactionRevenue)))+1),3))
+
+colnames(week)[1] = 'Week'
+
+# week$Week <- factor(week$Week, levels = week[['Week']])
+# # 
+# # 
+week$Week <- factor(week$Week, levels = c("Monday","Tuesday","Wednesday", "Thursday","Friday","Saturday","Sunday"))
+
+week$hover <- with(week, paste('Week: ',Week, '<br>', "Visits: ", n,'<br>','Revenue: ', rev))
+
+order = c(2,6,7,5,1,3,4)
+week = week[order,]
+
+plot_ly(x = ~Week, y = ~rev, data = week,type = 'scatter', mode = 'lines', hoverinfo = 'text', text = week$hover)%>%
+  layout(title = "Revenues per weekday (log scale)",
+         xaxis = list(title = "Weekday"),
+        yaxis = list(title = "Revenue"))
+```
+
+Revenue is higher in weekdays than weekends. 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## First Prediction
+
+In this stage we use cleaned original data (which not contain hits data from API) to do the prediction.
+
+### Load Packages
+```{r, warning = FALSE, message = FALSE, tidy = TRUE}
+## Load packages
+library(caret)
+library(MASS)
+library(glmnet)
+library(xgboost)
+library(keras)
+```
+
+### Reading Data
+```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
+## Read in data
+load("../dataset/US_1year.Rdata")
+
+## Take a quick glimpse at the data
+glimpse(dat)
+```
+
+### Study correlation between variables
+
+For the prediction task, we first study the correlation between different variables. Then, the correlation between the variable transactionRevunue and other explanatory variables are shown. We display the top 10 variables which have the highest positive correlation and the top 10 variables which have the highest negative correlation.
+
+```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
+## Delete some outcome or irregular variables
+dat <- dat %>% dplyr::select(- transactions, -totalTransactionRevenue, -adwordsClickInfo.isVideoAd, -visitStartTime, -referralPath)
+
+## Compute the correlation between transactionRevenue and other variables
+y <- dat$transactionRevenue
+y[which(is.na(y))] = 0
+m <- dat %>% 
+  mutate(date = ymd(date)) %>%
+  mutate(year = year(date),
+         month = month(date),
+         day = day(date),
+         isMobile = ifelse(isMobile, 1L, 0L),
+         isTrueDirect = ifelse(isMobile, 1L, 0L)) %>% 
+  mutate_all(funs(ifelse(is.na(.), 0, .))) %>% 
+  dplyr::select(-date, -fullVisitorId, -visitId) %>% 
+  mutate_if(is.character, factor) %>% 
+  mutate_if(is.factor, fct_lump, prop = 0.01) %>%
+  model.matrix(~ . - 1, .) %>% 
+  cor(y) %>%
+  data.table::as.data.table(keep.rownames=TRUE) %>% 
+  set_names("Feature", "rho") %>% 
+  arrange(-rho) 
+
+m
+
+```
+The result shows that the varialbe hits1, pageviews, sessionQualityDim and timeOnSite have correlation significantly larger than the other variables, which also correspond to our intuition.
+
+The result also shows that the variable bounces, newVisits, isTrueDirect, isMobile has the largest negative correlation with the variable transactionRevenue.
+
+### Constructing data matrix
+
+By the EDA, we find that there are a large porpotion amoung of missing data, so the method we use is that if there exists a missing data, we set that data to be zero, and then, for the data of character form, we transform it into factor, and for the factor data, we just flatten it into several 0 and 1 columns.
+
+```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
+## Data matrix to do the linear regression
+dat.mat <- dat %>% 
+  mutate(date = ymd(date)) %>%
+  mutate(year = year(date),
+         month = month(date),
+         day = day(date),
+         isMobile = ifelse(isMobile, 1L, 0L),
+         isTrueDirect = ifelse(isMobile, 1L, 0L)) %>% 
+  mutate_all(funs(ifelse(is.na(.), 0, .))) %>% 
+  dplyr::select(-date, -fullVisitorId, -visitId) %>% 
+  mutate_if(is.character, factor) %>% 
+  mutate_if(is.factor, fct_lump, prop = 0.01)
+
+# dat.mat <- dat %>% 
+#   dplyr::select(transactionRevenue, hits1, pageviews, sessionQualityDim, timeOnSite, channelGrouping, operatingSystem, visitNumber, city, region, metro) %>% 
+#   mutate_all(funs(ifelse(is.na(.), 0, .))) %>% 
+#   mutate_if(is.character, factor) %>% 
+#   mutate_if(is.factor, fct_lump, prop = 0.01)
+
+train.index <- sample(1 : nrow(dat.mat), 0.7 * nrow(dat.mat), replace = FALSE)
+dat.train <- dat.mat[train.index, ]
+dat.test <- dat.mat[-train.index, ]
+
+```
+
+### Predition Method
+
+To predict the transactionRevenue, we apply five different prediction method, Linear Regression, Logistic + Linear Regression, Deep Learning, Lasso and XGBoost. The detailed implementation is illustrated below.
+
+##### Using linear regression
+
+For the Linear regression method, we directly apply the linear regression to regress the log(transactionRevenue + 1) varaible to other explanatory variables and measure the mean sqaured error(MSE).
+```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
+model_lm <- lm(log(1 + transactionRevenue) ~ . , data = as.data.frame(dat.train))
+#summary(model_lm)
+pred.res <- predict(model_lm, as.data.frame(dat.test %>% dplyr::select(-transactionRevenue)))
+pred.res[which(pred.res < 0)] = 0
+loss.lm <- sum((log(dat.test$transactionRevenue + 1) - pred.res)^2) / length(pred.res)
+print(paste0("The loss for the linear regression is ", round(loss.lm,4) ))
+
+```
+
+##### Using logistic + linear regression 
+
+For the Logistic + Lienar Regression method, we develop a two stage method, the first step is fit a logistic regresssion to predict whether the customer will buy the certain products, if the prediciton result is false, the the transactionRevenue for that customer is 0, else we continue use the linear regression trained on the customers who buy the products to predict that the transactionRevenue will be. Then, we compute the MSE for the prediction.
+
+```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
+## Fit a logistic regression model to find out which customer buys items
+model_logistic <- glm(factor(as.numeric(transactionRevenue > 0)) ~. , data = dat.train, family = "binomial")
+predict.buy <- predict(model_logistic, dat.test %>% dplyr::select(-transactionRevenue), type="response")
+
+## Fit linear regression model for the buy option data
+model_lm <- lm(log(1 + transactionRevenue) ~ . , data = as.data.frame(dat.train %>% filter(transactionRevenue > 0)))
+
+## The index which has predict.buy larger than 0.5 and the prediciton result
+index = which(predict.buy > 0.5)
+pred.res <- predict(model_lm, dat.test[index, ])
+predicition.index <- rep(0, nrow(dat.test))
+predicition.index[index] = pred.res
+pred.res = predicition.index
+pred.res[which(pred.res < 0)] = 0
+
+## Loss for the linear regression 
+loss.logistic_lm <- sum((log(dat.test$transactionRevenue + 1) - pred.res)^2) / length(pred.res)
+print(paste0("The loss for the logistic + linear regression is ", round(loss.logistic_lm,4) ))
+
+```
+
+##### Using Keras Neural Network to do the prediciton
+
+For the Deep Learning, we use R keras to do the training, the structure of the model is “Input -> Dense(32, activation = “Relu”) -> Dropout(rate = 0.1) -> Dense(16, activation = “Relu”) -> Dropout(rate = 0.1) -> Dense(1, activation = “Linear)”. The optimizer use is rmsprop and training with 500 epochs for the use here. The training process is shown below
+
+```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE, eval = TRUE}
+dat.keras.x <- dat.mat %>% 
+  dplyr::select(-transactionRevenue) %>%
+  mutate_if(is.factor, fct_explicit_na) %>% 
+  mutate_if(is.numeric, funs(ifelse(is.na(.), 0L, .))) %>% 
+  mutate_if(is.factor, fct_lump, prop = 0.05) %>% 
+  model.matrix(~.-1, .) 
+dat.keras.y <- dat.mat %>% dplyr::select(transactionRevenue)
+
+## Dataset for training model
+dat.keras.train.x <- dat.keras.x[train.index, ]
+dat.keras.train.y <- pull(dat.keras.y[train.index, ])
+
+## Data for testing the model
+dat.keras.test.x <- dat.keras.x[-train.index, ]
+dat.keras.test.y <- pull(dat.keras.y[-train.index, ])
+
+## Train the neural network model
+model_nn <- keras_model_sequential() 
+
+model_nn %>% 
+   layer_dense(units = 32, activation = "relu", input_shape = ncol(dat.keras.x)) %>% 
+  layer_dropout(rate = 0.1) %>%
+  layer_dense(units = 16, activation = "relu") %>%
+  layer_dropout(rate = 0.1) %>%
+  layer_dense(units = 1, activation = "linear")
+
+model_nn %>% compile(loss = "mean_squared_error",
+                 optimizer = optimizer_rmsprop())
+
+history <- model_nn %>% 
+  fit(dat.keras.train.x, log(dat.keras.train.y + 1), 
+      epochs = 100, 
+      batch_size = 4096, 
+      verbose = 1, 
+      validation_split = 0.2)
+
+plot(history)
+
+pred.res <- predict(model_nn, dat.keras.test.x)
+pred.res[which(pred.res < 0)] = 0
+
+loss.nn <- sum((log(dat.test$transactionRevenue + 1) - pred.res)^2) / length(pred.res)
+print(paste0("The loss for the neural network is ", round(loss.nn,4) ))
+
+
+```
+
+##### Using Glmnet 
+
+For the Lasso predicition, we use the glmnet package, to apply the lasso, we first flatten the matrix to make factor columns into 0 and 1 columns and then scale the explanatory variables, the cv.glmnet function is then used to do the prediction. The lambda which has the lowest validaiton error is used to fit the final modle and do the prediction. The relationship between MSE and lambda is shown below.
+
+```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
+## The training dataset for x and y
+dat.glmnet.x <- dat.mat %>% 
+  dplyr::select(-transactionRevenue) %>%
+  # mutate_if(is.factor, fct_explicit_na) %>% 
+  # mutate_if(is.numeric, funs(ifelse(is.na(.), 0L, .))) %>% 
+  # mutate_if(is.factor, fct_lump, prop = 0.05) %>% 
+  model.matrix(~.-1, .) %>% 
+  scale() %>% 
+  round(4)
+dat.glmnet.y <- dat.mat %>% dplyr::select(transactionRevenue)
+
+## Training dataset for the lasso
+dat.glmnet.train.x <- dat.glmnet.x[train.index, ]
+dat.glmnet.train.y <- dat.glmnet.y[train.index, ]
+
+## Testing dataset for the lasso
+dat.glmnet.test.x <- dat.glmnet.x[-train.index, ]
+dat.glmnet.test.y <- dat.glmnet.y[-train.index, ]
+
+
+## Fitting the lasso 
+model_lasso <- cv.glmnet(dat.glmnet.x, (log(pull(dat.glmnet.y) + 1)), family="gaussian", alpha = 0, nlambda = 100, type.measure = "mse")
+pred.res <- predict(model_lasso, dat.glmnet.test.x, s=model_lasso$lambda.min, type = "response") 
+plot(model_lasso,xvar = "lambda", label = TRUE)
+
+#fit = glmnet(x, y, alpha = 0.2, weights = c(rep(1,50),rep(2,50)), nlambda = 20)
+loss.glmnet <- sum((log(dat.test$transactionRevenue + 1) - pred.res)^2) / length(pred.res)
+print(paste0("The loss for the lasso regression is ", round(loss.glmnet,4) ))
+
+```
+
+
+##### Using XG-Boosting
+
+For the XGBoost method, we use the XGBoost package, here we use the gblinear booster when a total rounds less than 2000.
+
+```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
+## Data matrix to do the xgboosting
+dat.xgb.x <- dat.mat %>%
+  dplyr::select(-transactionRevenue) %>%
+  mutate_if(is.factor, as.integer) %>% 
+  glimpse()
+dat.xgb.y <- dat.mat %>% dplyr::select(transactionRevenue)
+val.index <- sample(1 : length(train.index), 0.1 * length(train.index), replace = FALSE)
+
+## The training data matrix to do xg-boosting
+dat.xgb.train.x <- xgb.DMatrix(data = data.matrix(dat.xgb.x[train.index[-val.index], ]), label = log(1 + pull(dat.xgb.y[train.index[-val.index], ])))
+
+## The validation data matrix to do xg-boosting
+dat.xgb.val.x <- xgb.DMatrix(data = data.matrix(dat.xgb.x[train.index[val.index], ]), label = log(1 + pull(dat.xgb.y[train.index[val.index], ])))
+
+## The testing data matrix to do xg-boosting
+dat.xgb.test.x <- xgb.DMatrix(data = data.matrix(dat.xgb.x[-train.index, ]))
+
+p <- list(objective = "reg:linear",
+          booster = "gblinear",
+          eval_metric = "rmse",
+          nthread = 4,
+          eta = 0.05,
+          max_depth = 20,
+          min_child_weight = 1,
+          gamma = 0,
+          subsample = 0.8,
+          colsample_bytree = 1,
+          nrounds = 2000)
+
+
+model_xgb <- xgb.train(p, dat.xgb.train.x, p$nrounds, list(val = dat.xgb.val.x), print_every_n = 100, early_stopping_rounds = 100)
+
+pred.res <- predict(model_xgb, dat.xgb.test.x)
+loss.xgb <- sum((log(dat.xgb.y[-train.index, ] + 1) - pred.res)^2) / length(pred.res)
+print(paste0("The loss for the XGB is ", round(loss.xgb,4) ))
+```
+
+##### Final Loss Summary
+
+And here is the loss summary for every model
+
+```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
+loss <- c(loss.lm, loss.logistic_lm, loss.nn, loss.glmnet, loss.xgb)
+index <- c("lm", "logistic_lm","neural network", "glmnet", "xgb")
+loss.frame <- data.frame(loss, index)
+loss.frame %>% 
+  ggplot(aes(index, loss)) +
+  geom_bar(stat="identity")
+  
+```
+
+You will find that `Deep Learning` outperforms all the other methods by a margin. `Linear Regression`, `Lasso` and `XGBoost` has similar performance which may be accounted for the reason that the samples size is much larger than the number explanatory variables that variable selection is useless is this problem. `Logistic + Lienar` Regression performs worst, which may be for the reason that the logistic regression predicts poorly for whether the customer will buy or not.
+
+
+
+
+
+
+
+
+## Using Externel Data
+
+#### Loading packages and data (with external data)
+```{r, warning = FALSE, message = FALSE, tidy = TRUE}
+library(randomForest)
+
+load("../dataset/full.Rdata")
+glimpse(full)
+full = full %>% mutate(ID = paste0(fullVisitorId, visitId))
+```
+
+
+#### Find popular goods
+
+Let's wait and have a sight of what good are people buying.
+
+```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
+load("../dataset/hits.Rdata")
+
+hits_data = hits_data %>% mutate(ID = paste0(fullVisitorId, visitId))
+buy.id = hits_data %>% group_by(ID) %>%
+         summarise(buy = max(!is.na(transaction.transactionId))) %>%
+         filter(buy > 0)
+buy.id = buy.id$ID
+buydata = hits_data %>% filter(ID %in% buy.id)
+show_buy = head(buydata, n=50)
+
+product_name = c()
+for(i in 1:nrow(buydata)){
+  if(!is_empty(buydata$product[[i]])){
+    product_name = unique(c(product_name, buydata$product[[i]]$v2ProductName))
+  }
+}
+
+buycount = data.frame(name=product_name, count=0)
+
+for(i in 1:nrow(buydata)){
+  if(!is.na(buydata$eventInfo.eventAction[i]) & buydata$eventInfo.eventAction[i] == "Add to Cart"){
+    for(name in buydata$product[[i]]$v2ProductName){
+      buycount$count[buycount$name == name] = buycount$count[buycount$name == name]+1
+    }
+  }
+}
+
+colormap = function(x){
+  col = c()
+  for(rate in x){
+    if(rate > 4) col = c(col,"red")
+    else if(rate > 2.62) col = c(col, "orange")
+    else if(rate > 2.6) col = c(col, "blue")
+    else col = c(col, "black")
+  }
+  col
+}
+buycount %>% mutate(`Ratio (%)` = count / sum(count) * 100) %>% 
+             select(-count) %>% arrange(desc(`Ratio (%)`)) %>% head(n=10) %>%
+             rename(`Good Name` = name) %>%
+             mutate(`Ratio (%)` = cell_spec(`Ratio (%)`, color = colormap(`Ratio (%)`))) %>%
+             kable(escape = F) %>%
+             kable_styling(bootstrap_options = "striped", full_width = F, position = "left")
+
+topten = (buycount %>% arrange(desc(count)))["name"]$name[1:10] %>% as.character()
+```
+
+We find that `Google Sunglasses` is the best seller, following by `Google 22 oz Water Bottle` and `Google Twill Cap`.
+
+#### Finding Patterns to help find ways to summary hits data
+
+Let's try to describe some detail of the transaction behavior:
+
+```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
+#### Transaction won't happen when people are viewing the contents
+table(Content = full$contentGroup.contentGroup2, Transaction = full$has.transaction, useNA = "ifany") %>% 
+  kable() %>% 
+  kable_styling(bootstrap_options = "striped", full_width = F, position = "left") %>%
+  add_header_above(c("Content" = 1, "Had Transaction" = 2))
+
+#### However, lot's of people do exit at the content page
+table(full$contentGroup.contentGroup2, isExit = full$isExit, useNA = "ifany") %>% 
+  kable() %>% 
+  kable_styling(bootstrap_options = "striped", full_width = F, position = "left") %>%
+  add_header_above(c("Content " = 1, "Exit Page ?" = 2))
+
+#### Also there will be no transaction at entrance page
+table(full$has.transaction, isEntrance = full$isEntrance, useNA = "ifany") %>% 
+  kable() %>% 
+  kable_styling(bootstrap_options = "striped", full_width = F, position = "left") %>%
+  add_header_above(c("Transactions?" = 1, "Entrance Page?" = 2))
+
+### Which suggest that people just viewing content after entrance 
+### and exit then can not make revenue
+viewer = full %>% group_by(fullVisitorId, visitId) %>%
+                  summarise(buy = max(transactionRevenue>0),
+                            just.view = min(!is.na(isEntrance) |
+                                            page.pagePathLevel1 == "/home" |
+                                            !is.na(contentGroup.contentGroup2)))
+table(transaction = viewer$buy, just_view = viewer$just.view) %>% 
+  kable() %>% 
+  kable_styling(bootstrap_options = "striped", full_width = F, position = "left") %>%
+  add_header_above(c("Transaction?" = 1, "Just Viewing?" = 2))
+viewer = viewer %>% mutate(ID = paste0(fullVisitorId, visitId)) %>% select(-buy)
+
+### Which also suggest there should be some tag that is about transaction
+### Yes! eventInfo.eventAction is discribing people's action in the website
+unique(full$eventInfo.eventAction)
+addcart = full %>% group_by(fullVisitorId, visitId) %>% 
+                   summarise(buy = max(transactionRevenue>0),
+                             no_na = max(!is.na(eventInfo.eventAction)),
+                             add = sum(!is.na(eventInfo.eventAction) & eventInfo.eventAction == "Add to Cart"), 
+                             delete = sum(!is.na(eventInfo.eventAction) & eventInfo.eventAction == "Remove from Cart"))
+table(transaction = addcart$buy, Add_to_chart = addcart$add > 0) %>% 
+  kable() %>% 
+  kable_styling(bootstrap_options = "striped", full_width = F, position = "left") %>%
+  add_header_above(c("Transaction?" = 1, "Add to Cart?" = 2))
+table(transaction = addcart$buy, Remove_from_chart = addcart$delete > 0) %>% 
+  kable() %>% 
+  kable_styling(bootstrap_options = "striped", full_width = F, position = "left") %>%
+  add_header_above(c("Transaction?" = 1, "Remove from Cart?" = 2))
+table(transaction = addcart$buy, Actions = addcart$no_na > 0) %>% 
+  kable() %>% 
+  kable_styling(bootstrap_options = "striped", full_width = F, position = "left") %>%
+  add_header_above(c("Transaction?" = 1, "Had Actions?" = 2))
+
+## Is social referral important for transaction?
+## Yes, but referal seems to make people not to buy 
+## But may just beacuse of variance
+social = full %>% group_by(fullVisitorId, visitId) %>%
+                  summarise(buy = max(transactionRevenue>0),
+                            social = max(social.hasSocialSourceReferral == "Yes"))
+table(buy = social$buy, social_referal = social$social) %>% 
+  kable() %>% 
+  kable_styling(bootstrap_options = "striped", full_width = F, position = "left") %>%
+  add_header_above(c("Transaction?" = 1, "Socail Referral?" = 2))
+
+
+```
+
+As the result, we find that transactions won't happen when people are viewing the contents. However, lot's of people do exit at the content page. Also there will be no transaction at entrance page. All these Which suggest that people just viewing content after entrance and exit then can not make revenue. And that is true (see the table of just viewing), which also suggest there should be some tag that is about transaction. And, yes! eventInfo.eventAction is discribing people's action in the website. It will describe wether a visitor is clicking goods pictures, adding good to cart and removing good from cart, which are strong predictors (but not even as good as just.view). Also we find that social referral do have some effect on result, but unfortunately, it's a negetive effect. That's strange, but it might because social networks force you enter the shop page therefore you are less intend to buy goods compare to those enter the page by them own. Also it might because the variation, since people bought goods is of tiny amount.
+
+
+#### Summarise hits data
+
+The exploring suggests that we should use reduce the external dataset according to these features. And these are all explained in data section. Also we use this summerised data to do prediction to see that if they are powerful. I use randomforest here, because this section is to show the power of data, we just do a simple bagging to avoid overfitting and make result more stable (since the feature are increasing and levels num are big)
+
+```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
+### So we choose following reduction
+hits = full[,35:72]
+hits$time = as.numeric(hits$time)
+hits$hour = as.numeric(hits$hour)
+hits$price_q1[is.na(hits$price_q1)] = 0
+hits$price_q3[is.na(hits$price_q3)] = 0
+hits$price_q5[is.na(hits$price_q5)] = 0
+hits$contentGroup.contentGroup2[is.na(hits$contentGroup.contentGroup2)] = "other"
+hits$eventInfo.eventAction[is.na(hits$eventInfo.eventAction)] = "no action"
+reduced = hits %>% group_by(ID) %>%
+                   summarise(time_q1 = min(time),
+                             time_q2 = quantile(time, 0.333) - time_q1,
+                             time_q3 = quantile(time, 0.666) - time_q2,
+                             time_q4 = max(time) - time_q3,
+                             hour = median(hour),
+                             event_count = sum(type == "EVENT"),
+                             promotion_count = sum(!is.na(promotionActionInfo.promoIsView)),
+                             social_count = mean(social.hasSocialSourceReferral == "Yes"),
+                             Bags_count = sum(contentGroup.contentGroup2 == "Bags"),
+                             Apparel_count = sum(contentGroup.contentGroup2 == "Apparel"),
+                             Electronics_count = sum(contentGroup.contentGroup2 == "Electronics"),
+                             Brands_count = sum(contentGroup.contentGroup2 == "Brands"),
+                             Office_count = sum(contentGroup.contentGroup2 == "Office"),
+                             Accessories_count = sum(contentGroup.contentGroup2 == "Accessories"),
+                             Drinkware_count = sum(contentGroup.contentGroup2 == "Drinkware"),
+                             Nest_count = sum(contentGroup.contentGroup2 == "Nest"),
+                             Topten_count = sum(eventInfo.eventLabel %in% topten),
+                             Click_count = sum(eventInfo.eventAction %in% 
+                                               c("Quickview Click","Onsite Click","Product Click","Promotion Click")),
+                             Add_count = sum(eventInfo.eventAction == "Add to Cart"),
+                             Remove_count = sum(eventInfo.eventAction == "Remove from Cart"),
+                             price_q1 = median(price_q1[eventInfo.eventAction=="Add to Cart"]),
+                             price_q3 = median(price_q3[eventInfo.eventAction=="Add to Cart"]),
+                             price_q5 = median(price_q5[eventInfo.eventAction=="Add to Cart"])
+                             )
+
+reduced$price_q1[is.na(reduced$price_q1)] = 0
+reduced$price_q3[is.na(reduced$price_q3)] = 0
+reduced$price_q5[is.na(reduced$price_q5)] = 0
+reduced$price_q1 = log(1+reduced$price_q1)
+reduced$price_q3 = log(1+reduced$price_q3)
+reduced$price_q5 = log(1+reduced$price_q5)
+
+reduced = merge(reduced, viewer, by="ID")
+
+```
+```{r}
+### Let's see how can reduce itself perform for predicting
+revenue = full %>% group_by(ID) %>%
+          summarise(transactionRevenue = log(1+max(transactionRevenue)),
+                    hits1 = max(hits1))
+
+from_hits = merge(reduced, revenue, by="ID")
+glimpse(from_hits)
+
+train.ind = sample(nrow(from_hits), floor(0.7*nrow(from_hits)), replace = F)
+train = from_hits[train.ind,] %>% select(-ID, -time_q1)
+test = from_hits[-train.ind,] %>% select(-ID, -time_q1)
+
+rf = randomForest(transactionRevenue~., data = train, ntree = 1000)
+rf.pred = predict(rf, newdata = test)
+mean((rf.pred - test$transactionRevenue)^2)
+
+### And you can see this is already a little better
+```
+
+We should see that using this data already helps to get better answer.
+
+
+#### Finalize our model
+
+Now let's combine original data and our features extracted from hits data, and finalize our model
+
+```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
+original = full %>% group_by(ID) %>% filter(hitNumber == max(hitNumber))
+original = original[,1:34] %>% select(-hitNumber) %>%
+           mutate(ID = paste0(fullVisitorId, visitId)) %>%
+           dplyr::select(-fullVisitorId, -visitId)
+
+original$transactionRevenue = log(1+original$transactionRevenue)
+
+final.data = merge(original, reduced, by="ID") %>%
+             dplyr::select(-ID, -fullVisitorId, -visitId, -has.transaction)
+
+### then use same preprocess skills as in previous prediction
+
+final <- final.data %>%
+  mutate(date = ymd(date)) %>%
+  mutate(year = year(date),
+         month = month(date),
+         day = day(date),
+         isMobile = ifelse(isMobile, 1L, 0L),
+         isTrueDirect = ifelse(isMobile, 1L, 0L)) %>%
+  mutate_all(funs(ifelse(is.na(.), 0, .))) %>%
+  dplyr::select(-date) %>%
+  mutate_if(is.character, factor) %>%
+  mutate_if(is.factor, fct_lump, prop = 0.01)
+
+glimpse(final)
+```
+
+Here goes the final model, we use just.view to role out those just viewers (about 3/4) and hope this will help to increase the power of models (which might not help lot in tree based models). We also use randomForest here as the same reason above. We also plot the importance of features.
+
+```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
+train.ind = sample(nrow(final), floor(0.7*nrow(final)), replace = F)
+train = final[train.ind,] %>% select(-time_q1)
+test = final[-train.ind,] %>% select(-time_q1)
+
+
+table(transaction = final$transactionRevenue>0, just_view = final$just.view)
+train.sub = train %>% filter(just.view == 0)
+rf.sub = randomForest(transactionRevenue~., data = train.sub, ntree = 1000)
+
+predict.revenue = rep(NA, nrow(test))
+for(i in 1:nrow(test)){
+  if(test$just.view[i] == 1){
+    predict.revenue[i] = 0
+  }
+  else{
+    predict.revenue[i] = predict(rf.sub, test[i,])
+  }
+}
+mean((predict.revenue - test$transactionRevenue)^2)
+
+data.frame(importance = rf.sub$importance[,1], feature = rownames(rf.sub$importance)) %>%
+    arrange(desc(importance)) %>% ggplot(aes(x = reorder(feature, desc(importance)), y = importance)) +
+    geom_bar(stat = "identity", fill = "skyblue3") +
+    xlab("Features") + ylab("Importance") + ggtitle("Feature Importance Plot") +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+```
+
+You can see the result is also good but similar to just use summary hits data, maybe original data is not powerful compare to this one.
