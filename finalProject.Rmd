@@ -117,6 +117,8 @@ Need to mention that
 
 ## Data exploration
 
+More EDA can be found on [shiny](https://luqingan.shinyapps.io/google_revenue/) application
+
 ```{r, warning = FALSE, message = FALSE, tidy = TRUE}
 library(ggplot2)
 library(lubridate)
