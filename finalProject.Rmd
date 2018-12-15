@@ -5,6 +5,18 @@ date: "December 14, 2018"
 output: html_document
 ---
 
+## Important URLs
+
+[Repo](https://github.com/CHuanSite/Google-Revenue)
+
+[Data](https://github.com/CHuanSite/Google-Revenue/tree/master/dataset)
+
+[Web](https://chuansite.github.io/Data_Web/)
+
+[Shiny](https://luqingan.shinyapps.io/google_revenue/)
+
+[Shiny git](https://github.com/luqingan/google_revenue_shiny)
+
 ## Motivation and Overview
 
 Our project is based on the Kaggle Competition Google Analytics Customer Revenue Prediction and the following are from the descritption of this competition.
@@ -14,6 +26,18 @@ The 80/20 rule has proven true for many businesses–only a small percentage of 
 RStudio, the developer of free and open tools for R and enterprise-ready products for teams to scale and share work, has partnered with Google Cloud and Kaggle to demonstrate the business impact that thorough data analysis can have.
 
 In this project, we will analyze a Google Merchandise Store (also known as GStore, where Google swag is sold) customer dataset to predict revenue per customer. Hopefully, the outcome will be more actionable operational changes and a better use of marketing budgets for those companies who choose to use data analysis on top of GA data
+
+## Related Work
+
+Only related work is from kaggle website, where we can communicate with each other to deeper our understanding of the question.
+
+## Initial Questions
+
+What questions are you trying to answer? How did these questions evolve over the course of the project? What new questions did you consider in the course of your analysis?
+
+The general question we want to answer is that how to make data powerful? We want to know how to represent the data and how to choose statistical models. But along the project, the questions becomes more practical as "how to represent data if the exact tidy version of it will invovle much unecessary information?"
+"how to deal with the missing data when the missingness is terrible?" "how to choose model and do statistics in highly ill-conditioned data? can we do sequential modeling?" And even encounter some new questions other data itself and models, like "How to ensemble different models and also the externel data?" "how to reduce the features if typical dimension reduction failed because of data being not quite numerical and different entries has even different dimension?"
+
 
 ## Data Description
 
@@ -166,7 +190,7 @@ plot_ly(cg,x=~reorder(Var1,-Freq),y=~Freq,type = 'bar',text = cg$percent)%>%
 Over 40% of the visitors used organic search. 
 
 Here we explore the browser distribution. 
-```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
+```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE, eval = FALSE}
 
 names(sort(table(train$browser),decreasing=TRUE)[1:10])
 train_brow = train[which(train$browser%in%names(sort(table(train$browser),decreasing=TRUE)[1:10])),]
@@ -184,7 +208,7 @@ Most of the visitors used chrome browser. The most used browsers are chrome, saf
 
 Here we explore the device category distribution. 
 
-```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
+```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE, eval = FALSE}
 dc = data.frame(table(train$deviceCategory))
 dc  = dc%>% 
   mutate(percent = percent(Freq/sum(Freq)))
@@ -213,7 +237,7 @@ plot_ly(IM,x=~reorder(Var1,-Freq),y=~Freq,type = 'bar',text = IM$percent)%>%
 
 Here we explore the device operating system. 
 
-```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
+```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE, eval = FALSE}
 train_os = train[which(train$operatingSystem%in%names(sort(table(train$operatingSystem),decreasing=TRUE)[1:10])),]
 os = data.frame(table(train_os$operatingSystem))
 os = os[-which(os$Freq==0),]
@@ -231,7 +255,7 @@ Most of the visitors used Mac. The most used operating systems are Mac, Windows,
 
 Here we explore the device network domain. 
 
-```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE}
+```{r, warning = FALSE, message = FALSE, tidy = TRUE, cache = TRUE, eval = FALSE}
 train_nd = train[which(train$networkDomain%in%names(sort(table(train$networkDomain),decreasing=TRUE)[1:10])),]
 networkDomain = data.frame(table(train_nd$networkDomain))
 networkDomain = networkDomain[-which(networkDomain$Freq==0),]
@@ -1106,11 +1130,13 @@ data.frame(importance = rf.sub$importance[,1], feature = rownames(rf.sub$importa
 
 You can see the result is also good but similar to just use summary hits data, maybe original data is not powerful compare to this one.
 
-# Summary
+## Summary
 
 We learn that
 1. representing data is always an open question. You need to fully explore the data than you can find the right way to do it.
-2. Choosing models is not originally important, we can train them all and compare. But models typically will give reasonable result as you originally explore. Therefore, process to choose model will increase your efficiency
+
+2. Choosing models is not originally important, we can train them all and compare. But models typically will give reasonable result as you originally explore. Therefore, process to choose model will increase your efficiency.
+
 3. For ill-conditioned problems, fit another model to make the problem more regular might not improve the result (sequential modeling might introducing too much variation). But use some exploration result from the data to make the problem less ill-conditioned can help, which suggest us to fully explore the data before modeling and not using modeling itself to assist modeling.
 
 We justify our answers through a randomly assigned test dataset
